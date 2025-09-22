@@ -5,6 +5,7 @@ import joblib
 import smtplib
 from email.message import EmailMessage
 import plotly.express as px
+import plotly.graph_objects as go
 
 # --- IMPORTANT: Configure your email sender details here ---
 # You must generate a Google "App Password" to use this feature.
@@ -90,22 +91,83 @@ def check_password(mentor_id, password, mentors_df):
             st.session_state['logged_in'] = True
             st.session_state['mentor_id'] = mentor_id
             st.session_state['department'] = user_row['Department'].iloc[0]
+            st.session_state['page'] = 'dashboard'
             st.success("Login Successful! 🎉")
             st.rerun()
     st.error("Invalid Mentor ID or Password")
     return False
 
+# --- New: Student Details View ---
+def show_student_details(df):
+    st.subheader(f"Student Report: {st.session_state['selected_student_id']}")
+    
+    # Get student data
+    student_id = st.session_state['selected_student_id']
+    student_row = df[df['StudentID'] == student_id].iloc[0]
+    
+    # Get departmental averages for comparison
+    dept_df = df[df['Department'] == student_row['Department']]
+    dept_avg_attendance = dept_df['attendance'].mean()
+    dept_avg_marks = dept_df['marks'].mean()
+    
+    # Create columns for metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(label="Attendance", value=f"{student_row['attendance']:.1f}%", delta=f"{student_row['attendance'] - dept_avg_attendance:.1f}% vs Dept Avg")
+    with col2:
+        st.metric(label="Marks", value=f"{student_row['marks']:.1f}", delta=f"{student_row['marks'] - dept_avg_marks:.1f} vs Dept Avg")
+    with col3:
+        st.metric(label="Fees Due", value=f"₹{student_row['fees_due']:.0f}")
+
+    st.markdown('---')
+    st.header("Visualizations for this Student")
+    
+    # Bar chart for performance comparison
+    st.subheader("Performance vs. Departmental Average")
+    performance_data = {
+        'Metric': ['Attendance', 'Marks'],
+        'Student Value': [student_row['attendance'], student_row['marks']],
+        'Department Average': [dept_avg_attendance, dept_avg_marks]
+    }
+    performance_df = pd.DataFrame(performance_data)
+    fig = go.Figure(data=[
+        go.Bar(name='Student Value', x=performance_df['Metric'], y=performance_df['Student Value']),
+        go.Bar(name='Department Average', x=performance_df['Metric'], y=performance_df['Department Average'])
+    ])
+    fig.update_layout(barmode='group')
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Risk Meter (Gauge Chart)
+    st.subheader("Dropout Risk Meter")
+    fig_gauge = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=student_row['Dropout_Probability'] * 100,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Predicted Dropout Probability"},
+        gauge={'axis': {'range': [None, 100]},
+               'bar': {'color': "darkblue"},
+               'steps': [
+                   {'range': [0, 30], 'color': "green"},
+                   {'range': [30, 70], 'color': "yellow"},
+                   {'range': [70, 100], 'color': "red"}],
+               'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 90}}))
+    st.plotly_chart(fig_gauge)
+
+    if st.button("⬅️ Back to Dashboard"):
+        st.session_state['page'] = 'dashboard'
+        st.session_state['selected_student_id'] = None
+        st.rerun()
+
 # --- Dashboard View Logic ---
 def show_dashboard(df, mentors_df, model):
     mentor_id = st.session_state['mentor_id']
-    notifications_sent_to = []
-
+    
     # Filter data based on user role
     if mentor_id == 'ADM-001':
         st.subheader("University-Wide Student Data")
         filtered_df = df.copy()
     else:
-        st.subheader(f"Dashboard for Mentor: {mentor_id}")
+        st.subheader(f"Dashboard for Mentor: {mentors_df[mentors_df['MentorID'] == mentor_id]['MentorName'].iloc[0]}")
         filtered_df = df[df['MentorID'] == mentor_id].copy()
     
     if filtered_df.empty:
@@ -124,7 +186,8 @@ def show_dashboard(df, mentors_df, model):
 
     filtered_df['Risk_Level'] = filtered_df['Dropout_Probability'].apply(get_risk_level)
     
-    # Check for high-risk students and send consolidated notifications
+    # --- Check for high-risk students and send consolidated notifications ---
+    notifications_sent_to = []
     high_risk_students = filtered_df[filtered_df['Risk_Level'] == '🔴 High Risk']
     
     if not high_risk_students.empty:
@@ -137,9 +200,21 @@ def show_dashboard(df, mentors_df, model):
     if notifications_sent_to:
         mentors_str = ', '.join(notifications_sent_to)
         st.success(f"Notification(s) sent to: {mentors_str}")
-
-    # --- NEW: VISUALIZATION SECTION ---
+    
+    # --- Student Search/Navigation ---
     st.markdown('---')
+    st.header("Search for a Specific Student")
+    search_id = st.text_input("Enter Student ID (e.g., STD-0001)")
+    if st.button("View Student Details"):
+        if search_id in filtered_df['StudentID'].values:
+            st.session_state['selected_student_id'] = search_id
+            st.session_state['page'] = 'student_details'
+            st.rerun()
+        else:
+            st.error("Student ID not found in your assigned list. Please check the ID and try again.")
+    st.markdown('---')
+
+    # --- VISUALIZATION SECTION ---
     st.header("Visual Insights")
     
     # Scatter plot of Marks vs. Dropout Probability
@@ -168,7 +243,7 @@ def show_dashboard(df, mentors_df, model):
     )
     st.plotly_chart(fig_att, use_container_width=True)
 
-    # Risk Distribution for all students (Admin View)
+    # Overall Risk Distribution (Admin and Mentor View)
     st.subheader("Overall Risk Distribution")
     risk_counts_df = filtered_df['Risk_Level'].value_counts().reindex(['🟢 Low Risk', '🟡 Moderate Risk', '🔴 High Risk']).fillna(0).reset_index()
     risk_counts_df.columns = ['Risk_Level', 'Count']
@@ -178,7 +253,7 @@ def show_dashboard(df, mentors_df, model):
         y='Count',
         color='Risk_Level',
         color_discrete_map={'🔴 High Risk':'red', '🟡 Moderate Risk':'orange', '🟢 Low Risk':'green'},
-        title='University-wide Risk Distribution'
+        title='Risk Distribution'
     )
     st.plotly_chart(fig_risk_dist, use_container_width=True)
     
@@ -187,7 +262,6 @@ def show_dashboard(df, mentors_df, model):
         st.subheader("Risk Distribution by Department")
         dept_risk_counts = filtered_df.groupby('Department')['Risk_Level'].value_counts().unstack().fillna(0)
         
-        # Corrected code: Melt the DataFrame for plotting
         dept_risk_counts_long = dept_risk_counts.reset_index().melt(
             id_vars='Department', 
             var_name='Risk_Level', 
@@ -204,43 +278,88 @@ def show_dashboard(df, mentors_df, model):
         )
         st.plotly_chart(fig_dept_breakdown, use_container_width=True)
 
-    # --- Display Data Table ---
+    # --- Display Data Table with clickable IDs ---
     st.markdown('---')
     st.subheader("Student Risk Table")
-    display_cols = ['StudentID', 'Department', 'MentorID', 'Risk_Level', 'Dropout_Probability', 'attendance', 'marks', 'attempts', 'fees_due']
-    st.dataframe(filtered_df[display_cols].style.format({
-        'Dropout_Probability': '{:.2%}',
-        'attendance': '{:.1f}',
-        'marks': '{:.1f}',
-        'fees_due': '₹{:,.0f}'
-    }), use_container_width=True)
+    
+    # Callback function to handle button clicks
+    def handle_student_id_click(student_id):
+        st.session_state['selected_student_id'] = student_id
+        st.session_state['page'] = 'student_details'
+        st.rerun()
+
+    # Create the table header
+    table_cols = st.columns([1.5, 2, 2, 2, 1, 1.5, 1, 1])
+    headers = ['Student ID', 'Name', 'Department', 'Mentor', 'Risk Level', 'Probability', 'Attendance', 'Marks']
+    for col, header in zip(table_cols, headers):
+        with col:
+            st.markdown(f"**{header}**")
+
+    # Display the data
+    for index, row in filtered_df.iterrows():
+        table_cols = st.columns([1.5, 2, 2, 2, 1, 1.5, 1, 1])
+        with table_cols[0]:
+            st.button(row['StudentID'], key=f"view_btn_{row['StudentID']}", on_click=handle_student_id_click, args=(row['StudentID'],))
+        with table_cols[1]:
+            st.write(row['StudentName'])
+        with table_cols[2]:
+            st.write(row['Department'])
+        with table_cols[3]:
+            st.write(row['MentorID'])
+        with table_cols[4]:
+            st.write(row['Risk_Level'])
+        with table_cols[5]:
+            st.write(f"{row['Dropout_Probability']:.2%}")
+        with table_cols[6]:
+            st.write(f"{row['attendance']:.1f}")
+        with table_cols[7]:
+            st.write(f"{row['marks']:.1f}")
 
 # --- Main App Execution Flow ---
 def main():
     st.set_page_config(layout="wide", page_title="University Dashboard")
     st.title('University Dropout Risk Prediction')
-    st.markdown('### Secure Access Portal')
-
+    
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-
+        st.session_state['page'] = 'login'
+        st.session_state['selected_student_id'] = None
+    
     df, mentors_df, model = load_and_prepare_data()
     if df is None or mentors_df is None or model is None:
         return
 
-    if not st.session_state['logged_in']:
+    # Main navigation logic
+    if st.session_state['logged_in']:
+        st.sidebar.title(f"Welcome, {st.session_state['mentor_id']}!")
+        if st.sidebar.button("Logout"):
+            st.session_state['logged_in'] = False
+            st.session_state['page'] = 'login'
+            st.rerun()
+        
+        if st.session_state['page'] == 'dashboard':
+            # Calculate predictions once for the entire session
+            if 'predicted_df' not in st.session_state:
+                features = ['attendance', 'marks', 'attempts', 'fees_due']
+                predictions_proba = model.predict_proba(df[features])[:, 1]
+                df['Dropout_Probability'] = predictions_proba
+                def get_risk_level(prob):
+                    if prob >= 0.7: return '🔴 High Risk'
+                    elif prob >= 0.3: return '🟡 Moderate Risk'
+                    else: return '🟢 Low Risk'
+                df['Risk_Level'] = df['Dropout_Probability'].apply(get_risk_level)
+                st.session_state['predicted_df'] = df
+            show_dashboard(st.session_state['predicted_df'], mentors_df, model)
+
+        elif st.session_state['page'] == 'student_details':
+            show_student_details(st.session_state['predicted_df'])
+    else:
         st.subheader("Login to your account")
         mentor_id = st.text_input("Mentor ID")
         password = st.text_input("Password", type="password")
         
         if st.button("Login"):
             check_password(mentor_id, password, mentors_df)
-    else:
-        st.sidebar.title(f"Welcome, {st.session_state['mentor_id']}!")
-        if st.sidebar.button("Logout"):
-            st.session_state['logged_in'] = False
-            st.rerun()
-        show_dashboard(df, mentors_df, model)
 
 if __name__ == '__main__':
     main()
