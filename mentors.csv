@@ -1,7 +1,7 @@
-MentorID,MentorName,Department,Password
-ADM-001,University Admin,All,admin123
-MTR-101,Aarav Sharma,CSE,csepass
-MTR-102,Diya Singh,ECE,ecepass
-MTR-103,Rohan Mehta,IT,itpass
-MTR-104,Pooja Verma,MCT,mctpass
-MTR-105,Vikram Reddy,Civil,civilpass
+MentorID,MentorName,Department,Password,Email
+ADM-001,University Admin,All,admin123,niharikaxx06@gmail.com
+MTR-101,Aarav Sharma,CSE,csepass,jsaicharan_cse2305f1@mgit.ac.in
+MTR-102,Diya Singh,ECE,ecepass,niharikaxx06@gmail.com
+MTR-103,Rohan Mehta,IT,itpass,saicharan5192@gmail.com
+MTR-104,Pooja Verma,MCT,mctpass,niharikayamagani684@gmail.com
+MTR-105,Vikram Reddy,Civil,civilpass,yniharika_cse2305k3@mgit.ac.in
