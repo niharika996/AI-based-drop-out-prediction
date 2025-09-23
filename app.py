@@ -16,6 +16,7 @@ APP_PASSWORD = "reln tijr nsol ezds" # This is NOT your email password
 # This function simulates pulling data from separate sources and merging it.
 @st.cache_data
 def load_and_prepare_data():
+    """Loads and merges all data files into a single DataFrame."""
     try:
         # Step 1: Read the raw, disaggregated data
         attendance_df = pd.read_csv('attendance.csv')
@@ -43,6 +44,7 @@ def load_and_prepare_data():
 
 # --- Helper function to get mentor email ---
 def get_mentor_email(mentor_id, mentors_df):
+    """Retrieves mentor's email address from the mentors DataFrame."""
     try:
         email = mentors_df[mentors_df['MentorID'] == mentor_id]['Email'].iloc[0]
         return email
@@ -51,6 +53,7 @@ def get_mentor_email(mentor_id, mentors_df):
 
 # --- Email Notification Function (no UI output) ---
 def send_notification(mentor_email, student_details):
+    """Sends an email notification to a mentor about a high-risk student."""
     msg = EmailMessage()
     msg['Subject'] = f"Urgent: High-Risk Mentee Alert - Student {student_details['StudentID']}"
     msg['From'] = SENDER_EMAIL
@@ -85,6 +88,7 @@ def send_notification(mentor_email, student_details):
 
 # --- User Authentication and Session Management ---
 def check_password(mentor_id, password, mentors_df):
+    """Authenticates the user and sets up the session."""
     if mentor_id in mentors_df['MentorID'].values:
         user_row = mentors_df[mentors_df['MentorID'] == mentor_id]
         if user_row['Password'].iloc[0] == password:
@@ -97,8 +101,9 @@ def check_password(mentor_id, password, mentors_df):
     st.error("Invalid Mentor ID or Password")
     return False
 
-# --- New: Student Details View ---
+# --- Student Details View ---
 def show_student_details(df):
+    """Displays a detailed report for a single student."""
     st.subheader(f"Student Report: {st.session_state['selected_student_id']}")
     
     # Get student data
@@ -159,7 +164,8 @@ def show_student_details(df):
         st.rerun()
 
 # --- Dashboard View Logic ---
-def show_dashboard(df, mentors_df, model):
+def show_dashboard(df, mentors_df):
+    """Displays the main dashboard with student data and visualizations."""
     mentor_id = st.session_state['mentor_id']
     
     # Filter data based on user role
@@ -173,33 +179,6 @@ def show_dashboard(df, mentors_df, model):
     if filtered_df.empty:
         st.info("No students are currently assigned to this mentor or department.")
         return
-
-    # Make predictions and calculate risk levels
-    features = ['attendance', 'marks', 'attempts', 'fees_due']
-    predictions_proba = model.predict_proba(filtered_df[features])[:, 1]
-    filtered_df['Dropout_Probability'] = predictions_proba
-    
-    def get_risk_level(prob):
-        if prob >= 0.7: return '🔴 High Risk'
-        elif prob >= 0.3: return '🟡 Moderate Risk'
-        else: return '🟢 Low Risk'
-
-    filtered_df['Risk_Level'] = filtered_df['Dropout_Probability'].apply(get_risk_level)
-    
-    # --- Check for high-risk students and send consolidated notifications ---
-    notifications_sent_to = []
-    high_risk_students = filtered_df[filtered_df['Risk_Level'] == '🔴 High Risk']
-    
-    if not high_risk_students.empty:
-        for index, row in high_risk_students.iterrows():
-            mentor_email = get_mentor_email(row['MentorID'], mentors_df)
-            if mentor_email and row['MentorID'] not in notifications_sent_to:
-                if send_notification(mentor_email, row):
-                    notifications_sent_to.append(row['MentorID'])
-    
-    if notifications_sent_to:
-        mentors_str = ', '.join(notifications_sent_to)
-        st.success(f"Notification(s) sent to: {mentors_str}")
     
     # --- Student Search/Navigation ---
     st.markdown('---')
@@ -278,45 +257,70 @@ def show_dashboard(df, mentors_df, model):
         )
         st.plotly_chart(fig_dept_breakdown, use_container_width=True)
 
-    # --- Display Data Table with clickable IDs ---
+    # --- Display Data Table with clickable rows ---
     st.markdown('---')
     st.subheader("Student Risk Table")
+    st.info("💡 Click on any row to view detailed student metrics")
     
-    # Callback function to handle button clicks
-    def handle_student_id_click(student_id):
-        st.session_state['selected_student_id'] = student_id
+    # Create a copy with row selection
+    display_df = filtered_df[['StudentID', 'StudentName', 'Department', 'MentorID', 'Risk_Level', 'Dropout_Probability', 'attendance', 'marks', 'fees_due']].reset_index(drop=True)
+    
+    # Use data_editor with selection enabled
+    event = st.dataframe(
+        display_df,
+        column_config={
+            'StudentID': st.column_config.Column(label='Student ID', width='small'),
+            'StudentName': st.column_config.Column(label='Name', width='medium'),
+            'MentorID': st.column_config.Column(label='Mentor ID'),
+            'Risk_Level': st.column_config.Column(label='Risk Level'),
+            'Dropout_Probability': st.column_config.ProgressColumn(
+                label='Probability',
+                help='Predicted dropout probability',
+                format='%.2f%%',
+                min_value=0,
+                max_value=1
+            ),
+            'attendance': st.column_config.NumberColumn(label='Attendance', format='%.1f%%'),
+            'marks': st.column_config.NumberColumn(label='Marks', format='%.1f'),
+            'fees_due': st.column_config.NumberColumn(label='Fees Due', format='₹%.0f'),
+        },
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row"
+    )
+    
+    # Check if a row was selected
+    if len(event.selection.rows) > 0:
+        selected_row_index = event.selection.rows[0]
+        selected_student_id = display_df.iloc[selected_row_index]['StudentID']
+        st.session_state['selected_student_id'] = selected_student_id
         st.session_state['page'] = 'student_details'
         st.rerun()
 
-    # Create the table header
-    table_cols = st.columns([1.5, 2, 2, 2, 1, 1.5, 1, 1])
-    headers = ['Student ID', 'Name', 'Department', 'Mentor', 'Risk Level', 'Probability', 'Attendance', 'Marks']
-    for col, header in zip(table_cols, headers):
-        with col:
-            st.markdown(f"**{header}**")
+    # Add a button to send notifications
+    if st.sidebar.button("Send High-Risk Alerts"):
+        high_risk_students = filtered_df[filtered_df['Risk_Level'] == '🔴 High Risk']
+        notifications_sent_to = []
+        if not high_risk_students.empty:
+            with st.spinner('Sending alerts...'):
+                for index, row in high_risk_students.iterrows():
+                    mentor_email = get_mentor_email(row['MentorID'], mentors_df)
+                    if mentor_email and row['MentorID'] not in notifications_sent_to:
+                        if send_notification(mentor_email, row):
+                            notifications_sent_to.append(row['MentorID'])
+                if notifications_sent_to:
+                    mentors_str = ', '.join(notifications_sent_to)
+                    st.success(f"Notification(s) sent to: {mentors_str}")
+                else:
+                    st.info("No high-risk students found or alerts have already been sent to their mentors.")
+        else:
+            st.info("No high-risk students to send alerts for.")
 
-    # Display the data
-    for index, row in filtered_df.iterrows():
-        table_cols = st.columns([1.5, 2, 2, 2, 1, 1.5, 1, 1])
-        with table_cols[0]:
-            st.button(row['StudentID'], key=f"view_btn_{row['StudentID']}", on_click=handle_student_id_click, args=(row['StudentID'],))
-        with table_cols[1]:
-            st.write(row['StudentName'])
-        with table_cols[2]:
-            st.write(row['Department'])
-        with table_cols[3]:
-            st.write(row['MentorID'])
-        with table_cols[4]:
-            st.write(row['Risk_Level'])
-        with table_cols[5]:
-            st.write(f"{row['Dropout_Probability']:.2%}")
-        with table_cols[6]:
-            st.write(f"{row['attendance']:.1f}")
-        with table_cols[7]:
-            st.write(f"{row['marks']:.1f}")
 
 # --- Main App Execution Flow ---
 def main():
+    """Main application logic for the Streamlit app."""
     st.set_page_config(layout="wide", page_title="University Dashboard")
     st.title('University Dropout Risk Prediction')
     
@@ -335,11 +339,14 @@ def main():
         if st.sidebar.button("Logout"):
             st.session_state['logged_in'] = False
             st.session_state['page'] = 'login'
+            # Clear cached data to ensure a fresh start for the next login
+            if 'predicted_df' in st.session_state:
+                del st.session_state['predicted_df']
             st.rerun()
         
-        if st.session_state['page'] == 'dashboard':
-            # Calculate predictions once for the entire session
-            if 'predicted_df' not in st.session_state:
+        # --- Optimization: Run predictions only once per session ---
+        if 'predicted_df' not in st.session_state:
+            with st.spinner('Preparing dashboard... This may take a moment.'):
                 features = ['attendance', 'marks', 'attempts', 'fees_due']
                 predictions_proba = model.predict_proba(df[features])[:, 1]
                 df['Dropout_Probability'] = predictions_proba
@@ -349,7 +356,9 @@ def main():
                     else: return '🟢 Low Risk'
                 df['Risk_Level'] = df['Dropout_Probability'].apply(get_risk_level)
                 st.session_state['predicted_df'] = df
-            show_dashboard(st.session_state['predicted_df'], mentors_df, model)
+
+        if st.session_state['page'] == 'dashboard':
+            show_dashboard(st.session_state['predicted_df'], mentors_df)
 
         elif st.session_state['page'] == 'student_details':
             show_student_details(st.session_state['predicted_df'])
