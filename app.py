@@ -8,14 +8,17 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 from pymongo import MongoClient
+import io
 
 # --- IMPORTANT: Configure your email and MongoDB connection here ---
 SENDER_EMAIL = "dishcoveryhelp@gmail.com"
 APP_PASSWORD = "reln tijr nsol ezds" # Replace with your generated Google App Password
 
 # MongoDB Connection Details
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_URI = "mongodb://localhost:27017/" # For local MongoDB
 DB_NAME = "university_dashboard"
+MENTORS_COLLECTION = 'mentors_data'
+STUDENT_MASTER_COLLECTION = 'student_master_data'
 RAW_DATA_COLLECTIONS = {
     'attendance': 'attendance_data',
     'assessments': 'assessments_data',
@@ -29,6 +32,7 @@ def get_database_client():
     """Initializes and caches the MongoDB client."""
     try:
         client = MongoClient(MONGO_URI)
+        client.admin.command('ping') # Check connection
         return client
     except Exception as e:
         st.error(f"Failed to connect to MongoDB. Please check your MONGO_URI. Error: {e}")
@@ -40,9 +44,7 @@ def save_to_mongodb(df, collection_name):
     if client:
         db = client[DB_NAME]
         collection = db[collection_name]
-        
-        # Clear existing data and insert new data
-        collection.delete_many({})
+        collection.delete_many({}) # Clear existing data
         collection.insert_many(df.to_dict('records'))
         return True
     return False
@@ -53,30 +55,47 @@ def load_from_mongodb(collection_name, query={}):
     if client:
         db = client[DB_NAME]
         collection = db[collection_name]
-        
         data = list(collection.find(query, {'_id': 0}))
         if data:
             return pd.DataFrame(data)
     return pd.DataFrame()
 
+def load_all_static_data_to_db():
+    """Loads static CSVs into MongoDB if they don't exist in the database."""
+    client = get_database_client()
+    if client:
+        db = client[DB_NAME]
+        if db[MENTORS_COLLECTION].count_documents({}) == 0:
+            st.info("Loading mentor data from 'mentors.csv' for the first time...")
+            mentors_df = pd.read_csv('mentors.csv')
+            save_to_mongodb(mentors_df, MENTORS_COLLECTION)
+        
+        if db[STUDENT_MASTER_COLLECTION].count_documents({}) == 0:
+            st.info("Loading student master data from 'student_master.csv' for the first time...")
+            student_master_df = pd.read_csv('student_master.csv')
+            save_to_mongodb(student_master_df, STUDENT_MASTER_COLLECTION)
+
 # --- Data Processing and Prediction ---
 def process_uploaded_files_and_save_to_db(attendance_file, assessments_file, fees_file, model):
     """Processes the uploaded files, runs predictions, and saves results to MongoDB."""
     try:
-        # Step 1: Read the raw, disaggregated data from file uploaders
+        # Load student master data from the database
+        student_master = load_from_mongodb(STUDENT_MASTER_COLLECTION)
+        if student_master.empty:
+            st.error("Student master data not found in the database. Please ensure 'student_master.csv' is in the directory and reload the app.")
+            return None
+            
+        # Read uploaded files
         attendance_df = pd.read_csv(attendance_file)
         assessments_df = pd.read_csv(assessments_file)
         fees_df = pd.read_csv(fees_file)
 
-        # Step 2: Load the static master data files
-        student_master = pd.read_csv('student_master.csv')
-        
-        # Step 3: Check for required columns
+        # Check for required columns
         required_cols = {
             'Attendance CSV': ['StudentID', 'attendance'],
             'Assessments CSV': ['StudentID', 'marks', 'attempts'],
             'Fees CSV': ['StudentID', 'fees_due'],
-            'student_master.csv': ['StudentID', 'StudentName', 'Department', 'MentorID'],
+            'student_master_data': ['StudentID', 'StudentName', 'Department', 'MentorID'],
         }
         for file_name, df, cols in [('Attendance CSV', attendance_df, required_cols['Attendance CSV']), 
                                     ('Assessments CSV', assessments_df, required_cols['Assessments CSV']), 
@@ -84,16 +103,13 @@ def process_uploaded_files_and_save_to_db(attendance_file, assessments_file, fee
             if not all(col in df.columns for col in cols):
                 st.error(f"Error: The uploaded '{file_name}' is missing required columns: {', '.join([col for col in cols if col not in df.columns])}")
                 return None
-        if not all(col in student_master.columns for col in required_cols['student_master.csv']):
-            st.error(f"Error: 'student_master.csv' is missing required columns: {', '.join([col for col in required_cols['student_master.csv'] if col not in student_master.columns])}")
-            return None
-
-        # Step 4: Merge the DataFrames
+        
+        # Merge the DataFrames
         fused_df = pd.merge(attendance_df, assessments_df, on='StudentID', how='outer')
         fused_df = pd.merge(fused_df, fees_df, on='StudentID', how='outer')
         final_df = pd.merge(fused_df, student_master, on='StudentID', how='outer')
         
-        # Step 5: Run prediction and classify risk levels
+        # Run prediction and classify risk levels
         features = ['attendance', 'marks', 'attempts', 'fees_due']
         df_for_prediction = final_df.dropna(subset=features).copy()
         
@@ -113,7 +129,7 @@ def process_uploaded_files_and_save_to_db(attendance_file, assessments_file, fee
         
         predicted_df['Risk_Level'] = predicted_df['Dropout_Probability'].apply(get_risk_level)
 
-        # Step 6: Save data to MongoDB
+        # Save all data to MongoDB
         if save_to_mongodb(attendance_df, RAW_DATA_COLLECTIONS['attendance']) and \
            save_to_mongodb(assessments_df, RAW_DATA_COLLECTIONS['assessments']) and \
            save_to_mongodb(fees_df, RAW_DATA_COLLECTIONS['fees']) and \
@@ -124,7 +140,7 @@ def process_uploaded_files_and_save_to_db(attendance_file, assessments_file, fee
             return None
     
     except FileNotFoundError as e:
-        st.error(f"Error: A required local file was not found. Missing file: {e.filename}. Please ensure 'student_master.csv' is in the directory.")
+        st.error(f"An error occurred. Please ensure all required files are present. Error: {e}")
         return None
     except Exception as e:
         st.error(f"An unexpected error occurred during data processing: {e}")
@@ -156,7 +172,7 @@ def send_notification(mentor_email, student_details):
         print(f"Failed to send email to {mentor_email}: {e}")
         return False
 
-# --- User Authentication and Session Management (Unchanged) ---
+# --- User Authentication and Session Management ---
 def check_password(mentor_id, password, mentors_df):
     if mentor_id in mentors_df['MentorID'].values:
         user_row = mentors_df[mentors_df['MentorID'] == mentor_id]
@@ -374,7 +390,6 @@ def show_dashboard(df, mentors_df):
         st.session_state['page'] = 'student_details'
         st.rerun()
 
-    # Admin-only email button
     if mentor_id == 'ADM-001' and st.sidebar.button("📧 Send High-Risk Alerts", use_container_width=True, key="dashboard_alerts"):
         high_risk_students = filtered_df[filtered_df['Risk_Level'] == '🔴 High Risk']
         notifications_sent_to = []
@@ -403,13 +418,16 @@ def main():
         st.session_state['page'] = 'login'
         st.session_state['selected_student_id'] = None
     
+    # Load static data from MongoDB or local files if DB is empty
+    load_all_static_data_to_db()
+    
     try:
-        mentors_df = pd.read_csv('mentors.csv')
+        mentors_df = load_from_mongodb(MENTORS_COLLECTION)
         model = joblib.load('dropout_prediction_model_final.pkl')
         st.session_state['mentors_df'] = mentors_df
         st.session_state['model'] = model
     except FileNotFoundError as e:
-        st.error(f"Required file not found: {e}. Please ensure 'mentors.csv' and 'dropout_prediction_model_final.pkl' are in the same directory.")
+        st.error(f"Required file not found: {e}. Please ensure 'dropout_prediction_model_final.pkl' is in the same directory.")
         return
 
     if st.session_state['logged_in']:
