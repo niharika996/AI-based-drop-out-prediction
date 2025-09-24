@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import os
 from pymongo import MongoClient
 import io
+import statsmodels.api as sm
 
 # --- IMPORTANT: Configure your email and MongoDB connection here ---
 SENDER_EMAIL = "dishcoveryhelp@gmail.com"
@@ -186,7 +187,7 @@ def check_password(mentor_id, password, mentors_df):
     st.error("Invalid Mentor ID or Password")
     return False
 
-# --- Student Details View (Unchanged) ---
+# --- Student Details View (Updated) ---
 def show_student_details(df):
     student_id = st.session_state['selected_student_id']
     student_row = df[df['StudentID'] == student_id].iloc[0]
@@ -202,10 +203,9 @@ def show_student_details(df):
             st.rerun()
     
     st.markdown("---")
-    
+
+    # Use a simpler way to get department data
     dept_df = df[df['Department'] == student_row['Department']]
-    dept_avg_attendance = dept_df['attendance'].mean()
-    dept_avg_marks = dept_df['marks'].mean()
     
     st.markdown("### 📊 Performance Metrics")
     col1, col2, col3, col4 = st.columns(4)
@@ -213,14 +213,32 @@ def show_student_details(df):
         if pd.isna(student_row['attendance']):
             st.metric(label="📅 Attendance", value="Not Available", delta=None)
         else:
-            attendance_delta = student_row['attendance'] - dept_avg_attendance
-            st.metric(label="📅 Attendance", value=f"{student_row['attendance']:.1f}%", delta=f"{attendance_delta:.1f}% vs Dept Avg" if not pd.isna(attendance_delta) else None)
+            fig = px.bar(
+                x=['Your Score', 'Dept. Avg'],
+                y=[student_row['attendance'], dept_df['attendance'].mean()],
+                title="Attendance Comparison",
+                color=['Your Score', 'Dept. Avg'],
+                color_discrete_map={'Your Score':'#007bff', 'Dept. Avg':'#adb5bd'},
+                text_auto=True,
+            )
+            fig.update_layout(showlegend=False, yaxis_title="Attendance (%)", margin=dict(t=50, b=0, l=0, r=0))
+            fig.update_traces(textposition='outside')
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     with col2:
         if pd.isna(student_row['marks']):
             st.metric(label="📝 Marks", value="Not Available", delta=None)
         else:
-            marks_delta = student_row['marks'] - dept_avg_marks
-            st.metric(label="📝 Marks", value=f"{student_row['marks']:.1f}", delta=f"{marks_delta:.1f} vs Dept Avg" if not pd.isna(marks_delta) else None)
+            fig = px.bar(
+                x=['Your Score', 'Dept. Avg'],
+                y=[student_row['marks'], dept_df['marks'].mean()],
+                title="Marks Comparison",
+                color=['Your Score', 'Dept. Avg'],
+                color_discrete_map={'Your Score':'#28a745', 'Dept. Avg':'#adb5bd'},
+                text_auto=True,
+            )
+            fig.update_layout(showlegend=False, yaxis_title="Marks", margin=dict(t=50, b=0, l=0, r=0))
+            fig.update_traces(textposition='outside')
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     with col3:
         if pd.isna(student_row['attempts']):
             st.metric(label="✅ Attempts", value="Not Available")
@@ -326,30 +344,29 @@ def show_dashboard(df, mentors_df):
         with col1:
             st.markdown("##### Marks vs. Dropout Risk")
             plot_df = filtered_df.dropna(subset=['marks', 'Dropout_Probability'])
-            fig_marks = px.scatter(plot_df, x='marks', y='Dropout_Probability', color='Risk_Level', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'}, hover_data=['StudentID', 'attendance', 'fees_due'], title='Academic Performance vs. Risk Level')
+            fig_marks = px.scatter(plot_df, x='marks', y='Dropout_Probability', color='Risk_Level', trendline='ols', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'}, hover_data=['StudentID', 'attendance', 'fees_due'], title='Academic Performance vs. Risk Level')
             fig_marks.update_layout(height=400)
             st.plotly_chart(fig_marks, use_container_width=True)
         with col2:
             st.markdown("##### Attendance vs. Dropout Risk")
             plot_df = filtered_df.dropna(subset=['attendance', 'Dropout_Probability'])
-            fig_att = px.scatter(plot_df, x='attendance', y='Dropout_Probability', color='Risk_Level', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'}, hover_data=['StudentID', 'marks', 'fees_due'], title='Attendance Pattern vs. Risk Level')
+            fig_att = px.scatter(plot_df, x='attendance', y='Dropout_Probability', color='Risk_Level', trendline='ols', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'}, hover_data=['StudentID', 'marks', 'fees_due'], title='Attendance Pattern vs. Risk Level')
             fig_att.update_layout(height=400)
             st.plotly_chart(fig_att, use_container_width=True)
     with tab2:
         st.markdown("##### Overall Risk Distribution")
         risk_counts_df = filtered_df['Risk_Level'].value_counts().reindex(['🟢 Low Risk', '🟡 Moderate Risk', '🔴 High Risk']).fillna(0).reset_index()
         risk_counts_df.columns = ['Risk_Level', 'Count']
-        fig_risk_dist = px.bar(risk_counts_df, x='Risk_Level', y='Count', color='Risk_Level', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'}, title='Student Risk Category Distribution')
+        fig_risk_dist = px.pie(risk_counts_df, values='Count', names='Risk_Level', title='Overall Student Risk Category Distribution', color='Risk_Level', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'})
+        fig_risk_dist.update_traces(textposition='inside', textinfo='percent+label')
         fig_risk_dist.update_layout(height=500)
         st.plotly_chart(fig_risk_dist, use_container_width=True)
     with tab3:
         if mentor_id == 'ADM-001':
-            st.markdown("##### Risk Distribution by Department")
-            dept_risk_counts = filtered_df.groupby('Department')['Risk_Level'].value_counts().unstack().fillna(0)
-            dept_risk_counts_long = dept_risk_counts.reset_index().melt(id_vars='Department', var_name='Risk_Level', value_name='Count')
-            fig_dept_breakdown = px.bar(dept_risk_counts_long, x='Department', y='Count', color='Risk_Level', title='Department-wise Risk Analysis', color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'})
-            fig_dept_breakdown.update_layout(height=500)
-            st.plotly_chart(fig_dept_breakdown, use_container_width=True)
+            st.markdown("##### Department-wise Performance Distribution")
+            selected_metric = st.selectbox("Select a metric:", options=['attendance', 'marks'], key='dept_metric_selectbox')
+            fig_dept_box = px.box(filtered_df.dropna(subset=[selected_metric]), x='Department', y=selected_metric, color='Department', title=f'Distribution of {selected_metric.capitalize()} by Department')
+            st.plotly_chart(fig_dept_box, use_container_width=True)
         else:
             st.info("📋 Department overview is available for administrators only.")
 
@@ -410,7 +427,7 @@ def show_dashboard(df, mentors_df):
 # --- Main App Execution Flow ---
 def main():
     st.set_page_config(layout="wide", page_title="University Dashboard", page_icon="🎓", initial_sidebar_state="expanded")
-    st.markdown("""<style> .main-title{text-align: center;color: #1f4e79;font-size: 3rem;font-weight: bold;margin-bottom: 2rem;text-shadow: 2px 2px 4px rgba(0,0,0,0.1);}[data-testid="metric-container"] {background-color: #f8f9fa;border: 1px solid #e9ecef;padding: 1rem;border-radius: 8px;box-shadow: 0 2px 4px rgba(0,0,0,0.1);}.section-header {color: #495057;border-bottom: 3px solid #007bff;padding-bottom: 0.5rem;margin-bottom: 1.5rem;}.stButton button {background-color: #007bff;color: white;border-radius: 6px;border: none;padding: 0.5rem 1rem;font-weight: 500;transition: all 0.3s;}.stButton button:hover {background-color: #0056b3;transform: translateY(-1px);box-shadow: 0 4px 8px rgba(0,0,0,0.2);}.css-1d391kg {background-color: #f8f9fa;}#MainMenu, footer, header {visibility: hidden;}</style>""", unsafe_allow_html=True)
+    st.markdown("""<style> .main-title{text-align: center;color: #1f4e79;font-size: 3rem;font-weight: bold;margin-bottom: 2rem;text-shadow: 2px 2px 4px rgba(0,0,0,0.1);}[data-testid="metric-container"] {background-color: #f8f9fa;border: 1px solid #e9ecef;padding: 1rem;border-radius: 8px;box-shadow: 0 2px 4px rgba(0,0,0,0.1);}.section-header {color: #495057;border-bottom: 3px solid #007bff;padding-bottom: 0.5rem;margin-bottom: 1.5rem;}.stButton button {background-color: #007bff;color: white;border-radius: 6px;border: none;padding: 0.5rem 1rem;font-weight: 500;transition: all 0.3s;}.stButton button:hover {background-color: #0056b3;transform: translateY(-1px);box-shadow: 4px 4px 8px rgba(0,0,0,0.2);}.css-1d391kg {background-color: #f8f9fa;}#MainMenu, footer, header {visibility: hidden;}</style>""", unsafe_allow_html=True)
     st.markdown('<h1 class="main-title">🎓 University Dropout Risk Analytics Platform</h1>', unsafe_allow_html=True)
     
     if 'logged_in' not in st.session_state:
