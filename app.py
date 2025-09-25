@@ -7,6 +7,7 @@ from email.message import EmailMessage
 import plotly.express as px
 import plotly.graph_objects as go
 from pymongo import MongoClient
+import multiprocessing
 
 # =====================================================================================
 # CONFIGURATION
@@ -56,9 +57,26 @@ def save_to_mongodb(df, collection_name, week_number):
     if client:
         db = client[DB_NAME]
         collection = db[collection_name]
-        collection.delete_many({'Week': week_number})
+        # This is the key part: it deletes all documents for a specific week before inserting new ones.
+        # This prevents duplicate records for the same week while allowing the collection to grow with new weeks.
+        collection.delete_many({'Week': int(week_number)}) # Fixed: Convert to int
         collection.insert_many(df.to_dict('records'))
         return True
+    return False
+
+def update_student_reason(student_id, week, reason, mentor_id):
+    """
+    Updates a specific student's record with a reason provided by a mentor.
+    This function adds a 'MentorNotes' and 'MentorID_Notes' field to the document.
+    """
+    client = get_database_client()
+    if client:
+        db = client[DB_NAME]
+        collection = db[PROCESSED_DATA_COLLECTION]
+        query = {'StudentID': student_id, 'Week': int(week)} # Fixed: Convert to int
+        update = {'$set': {'MentorNotes': reason, 'MentorID_Notes': mentor_id}}
+        result = collection.update_one(query, update)
+        return result.modified_count > 0
     return False
 
 def setup_initial_db_data():
@@ -194,6 +212,23 @@ University Admin
     except Exception:
         return False
 
+# Function to run in a separate process
+def _send_alerts_in_background(sender_email, app_password, mentors_df_json, high_risk_students_json):
+    """
+    Function to send alerts in a separate process.
+    Takes JSON serialized dataframes as arguments.
+    """
+    mentors_df = pd.read_json(mentors_df_json)
+    high_risk_students = pd.read_json(high_risk_students_json)
+
+    mentors_to_notify = high_risk_students['MentorID'].unique()
+    for mentor_id in mentors_to_notify:
+        mentor_email = get_mentor_email(mentor_id, mentors_df)
+        student_info = high_risk_students[high_risk_students['MentorID'] == mentor_id].iloc[0]
+        if mentor_email:
+            # We don't need a return value, just send the email
+            send_notification(mentor_email, student_info)
+
 # =====================================================================================
 # UI & PAGE RENDERING
 # =====================================================================================
@@ -257,15 +292,15 @@ def render_sidebar(latest_week_df, mentors_df):
             if st.button("Send High-Risk Alerts", use_container_width=True, key="send_alerts_button"):
                 high_risk_students = latest_week_df[latest_week_df['Risk_Level'] == '🔴 High Risk']
                 if not high_risk_students.empty:
-                    mentors_to_notify = high_risk_students['MentorID'].unique()
-                    with st.spinner('Sending alerts...'):
-                        sent_count = 0
-                        for mentor_id in mentors_to_notify:
-                            mentor_email = get_mentor_email(mentor_id, mentors_df)
-                            student_info = high_risk_students[high_risk_students['MentorID'] == mentor_id].iloc[0]
-                            if mentor_email and send_notification(mentor_email, student_info):
-                                sent_count += 1
-                    st.success(f"Alerts sent to {sent_count} mentors.")
+                    # Serialize dataframes to JSON for multiprocessing
+                    mentors_df_json = mentors_df.to_json()
+                    high_risk_students_json = high_risk_students.to_json()
+
+                    # Start the background process without blocking the UI
+                    process = multiprocessing.Process(target=_send_alerts_in_background, args=(SENDER_EMAIL, APP_PASSWORD, mentors_df_json, high_risk_students_json))
+                    process.daemon = True # Allows process to terminate if parent app exits
+                    process.start()
+                    st.info("✅ Alerts are being sent in the background. The app will remain responsive.")
                 else:
                     st.info("No high-risk students to send alerts for.")
             
@@ -297,27 +332,46 @@ def render_dashboard_page(all_data, mentors_df):
 
     latest_week = int(all_data['Week'].max())
     st.session_state.latest_week = latest_week
-    df = all_data[all_data['Week'] == latest_week].copy()
+    # Filter the entire dataset to get only the latest week's data
+    latest_week_data = all_data[all_data['Week'] == latest_week].copy()
 
     # Filter data based on user role
     if st.session_state.mentor_id == 'ADM-001':
         st.subheader(f"University-Wide Data (Latest Week: {latest_week})")
-        filtered_df = df
+        filtered_df = latest_week_data
     else:
         mentor_info = mentors_df[mentors_df['MentorID'] == st.session_state.mentor_id].iloc[0]
         st.subheader(f"Dashboard for Mentor: {mentor_info['MentorName']} (Latest Week: {latest_week})")
-        filtered_df = df[df['MentorID'] == st.session_state.mentor_id].copy()
+        # Filter the latest week's data by the mentor's ID
+        filtered_df = latest_week_data[latest_week_data['MentorID'] == st.session_state.mentor_id].copy()
 
     if filtered_df.empty:
         st.info("No student data is available for the latest week. This may be because no data has been processed or your assigned students are not in this week's data.")
         return
 
-    # --- VISUALIZATIONS RESTORED ---
+    # --- Student Search Bar ---
+    st.markdown("---")
+    st.markdown("### 🔍 Search Student")
+    with st.form("search_form"):
+        student_id_search = st.text_input("Enter Student ID to view details")
+        if st.form_submit_button("Search"):
+            if student_id_search and student_id_search in filtered_df['StudentID'].values:
+                st.session_state.selected_student_id = student_id_search
+                st.session_state.page = 'student_details'
+                st.rerun()
+            else:
+                st.error("Student ID not found in the current week's data. Please check the ID or try a different one.")
+    
+    st.markdown("---")
+
+    # --- VISUALIZATIONS ---
     st.markdown('<h2 class="section-header">📈 Visual Analytics Dashboard</h2>', unsafe_allow_html=True)
+    st.info(f"The visualizations below display data for the **{len(filtered_df)}** students from **Week {latest_week}**.")
     tab1, tab2, tab3 = st.tabs(["📊 Performance Analysis", "⚠️ Risk Distribution", "🏢 Department Overview"])
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
+            # Use the filtered_df which only contains the latest week's data
             plot_df = filtered_df.dropna(subset=['marks', 'Dropout_Probability'])
             if plot_df.empty:
                 st.warning("No data with both marks and risk scores to display this chart.")
@@ -327,6 +381,7 @@ def render_dashboard_page(all_data, mentors_df):
                                  color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'})
                 st.plotly_chart(fig, use_container_width=True)
         with col2:
+            # Use the filtered_df which only contains the latest week's data
             plot_df = filtered_df.dropna(subset=['attendance', 'Dropout_Probability'])
             if plot_df.empty:
                 st.warning("No data with both attendance and risk scores to display this chart.")
@@ -336,6 +391,7 @@ def render_dashboard_page(all_data, mentors_df):
                                  color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'})
                 st.plotly_chart(fig, use_container_width=True)
     with tab2:
+        # Use the filtered_df which only contains the latest week's data
         risk_counts = filtered_df['Risk_Level'].value_counts().reindex(['🟢 Low Risk', '🟡 Moderate Risk', '🔴 High Risk']).fillna(0)
         if risk_counts.sum() == 0:
              st.warning("No risk data to display this chart.")
@@ -360,10 +416,17 @@ def render_dashboard_page(all_data, mentors_df):
     st.markdown("---")
     st.markdown("### 📋 Student Database (Latest Week)")
     st.info("💡 Click any row to see a student's detailed weekly progress.")
+    
+    # Render dataframe with the new MentorNotes column
     event = st.dataframe(
         filtered_df,
-        column_config={'Dropout_Probability': st.column_config.ProgressColumn('Risk Score', format='%.2f', min_value=0, max_value=1)},
-        on_select="rerun", selection_mode="single-row"
+        column_config={
+            'Dropout_Probability': st.column_config.ProgressColumn('Risk Score', format='%.2f', min_value=0, max_value=1),
+            'MentorNotes': st.column_config.Column('Mentor Notes', help='Notes added by the mentor')
+        },
+        height=500, # Increased height to show more rows at once
+        on_select="rerun", selection_mode="single-row",
+        use_container_width=True,
     )
     if event.selection.rows:
         st.session_state.selected_student_id = filtered_df.iloc[event.selection.rows[0]]['StudentID']
@@ -383,6 +446,25 @@ def render_student_details_page(all_data):
         if st.button("⬅️ Back to Dashboard", use_container_width=True, key="back_button"):
             st.session_state.page = 'dashboard'; st.rerun()
     st.markdown("---")
+
+    # Mentor Notes Section - visible for all users if notes exist
+    if 'MentorNotes' in latest_row and pd.notna(latest_row['MentorNotes']):
+        st.info(f"**Notes from Mentor ({latest_row.get('MentorID_Notes', 'N/A')}):** {latest_row['MentorNotes']}")
+    
+    # Form for mentors to add notes (only for non-admins and high-risk students)
+    if st.session_state.mentor_id != 'ADM-001' and latest_row['Risk_Level'] == '🔴 High Risk':
+        st.markdown("### 📝 Add a Note for This Student")
+        with st.form("mentor_notes_form", clear_on_submit=True):
+            note = st.text_area("Reason for Student Risk (e.g., family issues, health problems, etc.)", max_chars=500)
+            if st.form_submit_button("Save Note"):
+                if note:
+                    if update_student_reason(student_id, int(latest_row['Week']), note, st.session_state.mentor_id): # Fixed: Convert to int
+                        st.success("✅ Note saved successfully!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to save the note. Please try again.")
+                else:
+                    st.warning("Please enter a note before saving.")
 
     # Trend Charts
     st.subheader("📈 Performance Trend Analysis")
