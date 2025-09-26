@@ -34,38 +34,40 @@ Install all necessary Python libraries using pip:
 
 ```bash
 pip install streamlit pandas numpy scikit-learn plotly pymongo joblib
-
-
----
-
-## 2. File Structure
+```
+### 2. File Structure
 
 university-dashboard-project/
-├── app.py # The main Streamlit application script.
-├── dropout_prediction_model_final.pkl # Pre-trained ML model (required).
-├── mentors.csv # Initial data for user authentication (required).
-└── student_master.csv # Static student information (required).
+├── app.py # Main Streamlit application script
+├── dropout_prediction_model_final.pkl # Pre-trained ML model
+├── mentors.csv # Initial data for user authentication
+└── student_master.csv # Static student information
 
-## 3. MongoDB Configuration
+### 3. MongoDB Configuration
 
-The application is configured to connect to a local MongoDB instance.  
+The application connects to a local MongoDB instance.
 
 1. Start your MongoDB server.  
-2. The application will automatically attempt to create the database (`university_dashboard`) and initialize the `mentors_data` and `student_master_data` collections on its first run if they are empty, using the local CSV files.  
+2. On the first run, the app will automatically:
+   - Create the database `university_dashboard`
+   - Initialize the collections `mentors_data` and `student_master_data` if they are empty  
+     using the local CSV files.  
 
-⚠️ **Important**: Ensure your `mentors.csv` file contains the correct user IDs, roles, and departments to match the application's logic (e.g., `ADM-`, `PRN-`, `HOD-` prefixes for roles).  
+⚠️ **Important:** Ensure `mentors.csv` contains the correct user IDs, roles, and departments to match the application's logic (e.g., `ADM-`, `PRN-`, `HOD-` prefixes).
 
 ---
 
-## 4. Email Alert Setup
+### 4. Email Alert Setup
 
-To enable the email notification feature, you must configure a **Google App Password** for the sender email.  
+To enable email notifications:
 
 1. Go to your **Google Account Security settings**.  
-2. Navigate to **How you sign in to Google > App passwords**.  
-3. Generate a new password for the **"Mail" app on your computer**.  
-4. Update the following line in `app.py` with your generated password:  
+2. Navigate to **How you sign in to Google → App passwords**.  
+3. Generate a new password for the **Mail** app on your computer.  
+4. Update `app.py` with the generated password:
 
 ```python
 APP_PASSWORD = "reln tijr nsol ezds"  # <- REPLACE THIS
+```
+
 
