@@ -38,10 +38,12 @@ pip install streamlit pandas numpy scikit-learn plotly pymongo joblib
 ### 2. File Structure
 
 university-dashboard-project/
-├── app.py # Main Streamlit application script
-├── dropout_prediction_model_final.pkl # Pre-trained ML model
-├── mentors.csv # Initial data for user authentication
-└── student_master.csv # Static student information
+├── app.py # Main Streamlit application script  
+├── dropout_prediction_model_final.pkl # Pre-trained ML model  
+├── mentors.csv # Initial data for user authentication  
+└── student_master.csv # Static student information  
+
+---
 
 ### 3. MongoDB Configuration
 
