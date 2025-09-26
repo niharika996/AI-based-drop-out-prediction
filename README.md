@@ -73,5 +73,27 @@ To enable email notifications:
 ```python
 APP_PASSWORD = "reln tijr nsol ezds"  # <- REPLACE THIS
 ```
+---
 
+### 🚀 Running the Application
+
+Start the Streamlit application from your terminal:
+
+```bash
+python -m streamlit run app.py
+```
+The application will open in your web browser, typically at:
+👉 http://localhost:8501
+
+---
+
+###🔑 Demo Credentials
+
+Use the following credentials to test the role-based views:  
+
+Role	         User ID	      Password	      Department  
+Admin	         ADM-001	      admin123	      All  
+Principal	   PRN-001	      principal123	All  
+HOD (CSE)	   HOD-CSE	      hodcse123	   Computer Science  
+Mentor	      MTR-CSE-01	   mentorpass	   Computer Science  
 
