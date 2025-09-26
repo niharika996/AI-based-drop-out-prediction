@@ -35,9 +35,11 @@ Install all necessary Python libraries using pip:
 ```bash
 pip install streamlit pandas numpy scikit-learn plotly pymongo joblib
 ```
+---
+
 ### 2. File Structure
 
-university-dashboard-project/
+university-dashboard-project/  
 ├── app.py # Main Streamlit application script  
 ├── dropout_prediction_model_final.pkl # Pre-trained ML model  
 ├── mentors.csv # Initial data for user authentication  
