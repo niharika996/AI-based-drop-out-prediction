@@ -87,7 +87,7 @@ The application will open in your web browser, typically at:
 
 ---
 
-###🔑 Demo Credentials
+### 🔑Demo Credentials
 
 Use the following credentials to test the role-based views:  
 
