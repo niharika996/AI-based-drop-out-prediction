@@ -398,6 +398,7 @@ def render_dashboard_page(all_data, mentors_df):
     """Displays the main dashboard with data from the latest week."""
     
     # Filter data based on user role
+    # Note: The data frame 'df' here is already filtered down to the user's scope (e.g., HOD's department)
     if st.session_state.user_role == 'Admin':
         st.subheader("University-Wide Data")
         if all_data.empty:
@@ -443,6 +444,7 @@ def render_dashboard_page(all_data, mentors_df):
             return
 
     # User-agnostic dashboard content
+    latest_week = st.session_state.latest_week
     st.markdown(f"**Displaying data for Week {latest_week}** ({len(df)} students)")
     
     # Search bar for students
@@ -479,13 +481,42 @@ def render_dashboard_page(all_data, mentors_df):
                      color=risk_counts.index, color_discrete_map={'🔴 High Risk':'#dc3545', '🟡 Moderate Risk':'#ffc107', '🟢 Low Risk':'#28a745'})
         st.plotly_chart(fig, use_container_width=True)
     with tab3:
-        if st.session_state.user_role in ['Admin', 'Principal']:
-            metric = st.selectbox("Select metric:", ['attendance', 'marks'])
-            fig = px.box(df.dropna(subset=[metric]), x='Department', y=metric, color='Department',
-                         title=f'Distribution of {metric.capitalize()} by Department')
-            st.plotly_chart(fig, use_container_width=True)
+        # --- FIX: Allow HOD to see Department Overview, restricted to their department ---
+        if st.session_state.user_role in ['Admin', 'Principal', 'HOD']:
+            
+            # If Admin/Principal, they see all departments in the current DF ('df' is university-wide)
+            if st.session_state.user_role in ['Admin', 'Principal']:
+                data_for_viz = df.dropna(subset=['attendance', 'marks'])
+                
+            # If HOD, 'df' is already filtered to their department, so the Department column will only have one value.
+            # We still allow the visualization, but it will only show their department's data.
+            elif st.session_state.user_role == 'HOD':
+                # Since HOD's 'df' is filtered by department, we use it directly.
+                # The box plot will look like a single box, comparing their department against itself,
+                # which represents their departmental summary.
+                data_for_viz = df.dropna(subset=['attendance', 'marks'])
+            
+            if not data_for_viz.empty:
+                metric = st.selectbox("Select metric:", ['attendance', 'marks'], key="dept_viz_metric")
+                
+                # If HOD, 'Department' is constant, so we use 'Risk_Level' for comparison instead.
+                # If Admin/Principal, we use 'Department' to compare all departments.
+                color_by = 'Department' if st.session_state.user_role in ['Admin', 'Principal'] else 'Risk_Level'
+                
+                fig = px.box(data_for_viz, x='Department', y=metric, color=color_by,
+                             title=f'Distribution of {metric.capitalize()} by Department')
+                
+                # If HOD, center the single box or adjust the x-axis label.
+                if st.session_state.user_role == 'HOD':
+                     fig.update_xaxes(title_text=f"{st.session_state.user_dept} Department")
+                     fig.update_traces(showlegend=True) # Ensure legend for Risk_Level shows up
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                 st.info("No complete student data available for visualization in this scope.")
+
         else:
-            st.info("This feature is available for Principals and Admins only.")
+            st.info("This feature is available for HODs, Principals, and Admins only.")
 
     # --- Student Database Table ---
     st.markdown("---")
